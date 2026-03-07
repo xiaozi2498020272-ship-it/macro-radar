@@ -3,7 +3,7 @@ name: Daily Macro Radar
 on:
   schedule:
     # 这里的 cron 使用 UTC 时间，0 0 * * * 代表 UTC 0点，即北京时间早上 8 点
-    - cron: '0 0 * * *'
+    - cron: '30 6 * * 1-5' # 每天北京时间 14:30 触发 (周一到周五)
   workflow_dispatch: # 这个指令允许你在网页上手动点击按钮触发运行，方便测试
 
 jobs:
