@@ -3,6 +3,8 @@ import datetime
 import pandas as pd
 import requests
 import time
+import concurrent.futures
+import threading
 
 # === 核心配置区 ===
 PUSH_TOKEN = "0388622be9f34acdbaaafa2126e80fa2"
@@ -54,10 +56,11 @@ def get_macro_str():
         return f"⚠️ 宏观数据抓取异常: {e}\n"
 
 def get_market_str():
-    """抓取核心资产每日盘口数据"""
+    """抓取核心资产每日盘口数据 (已剔除全市场下载，光速拉取)"""
     print("正在抓取盘口数据...")
     report_lines = ["**【核心资产异动播报】**\n"]
     try:
+        # A股依然用实盘接口，因为A股ETF数量少，速度极快
         a_etf_df = ak.fund_etf_spot_em()
         target_a_assets = {"510500": "中证500ETF (A股宽基)", "588200": "科创芯片ETF (核心科技)", "518880": "黄金ETF (防御底仓)"}
         report_lines.append("**📍 国内盘面 (A股/黄金)**")
@@ -70,17 +73,24 @@ def get_market_str():
                 report_lines.append(f"- {name}: `{price}` | {pct_change}% {trend}")
             else: report_lines.append(f"- {name}: 数据获取失败")
             
-        us_etf_df = ak.stock_us_spot_em()
+        # 美股改为精准狙击模式，避开13000只股票的全盘下载
         target_us_assets = {"105.SPY": "SPY (标普500)", "105.QQQ": "QQQ (纳指100)"}
         report_lines.append("\n**📍 海外盘面 (美股引擎)**")
         for code, name in target_us_assets.items():
-            asset_data = us_etf_df[us_etf_df["代码"] == code]
-            if not asset_data.empty:
-                price = asset_data["最新价"].values[0]
-                pct_change = asset_data["涨跌幅"].values[0]
-                trend = "🔴涨" if pct_change > 0 else "🟢跌" if pct_change < 0 else "⚪平"
-                report_lines.append(f"- {name}: `${price}` | {pct_change}% {trend}")
-            else: report_lines.append(f"- {name}: 数据获取失败 (检查前缀)")
+            try:
+                # 定向拉取单只ETF历史数据，只取最后两天计算涨跌，毫秒级！
+                us_df = ak.stock_us_hist(symbol=code, period="daily")
+                if not us_df.empty and len(us_df) >= 2:
+                    price = us_df.iloc[-1]['收盘']
+                    prev_close = us_df.iloc[-2]['收盘']
+                    pct_change = round((price - prev_close) / prev_close * 100, 2)
+                    trend = "🔴涨" if pct_change > 0 else "🟢跌" if pct_change < 0 else "⚪平"
+                    report_lines.append(f"- {name}: `${price}` | {pct_change}% {trend}")
+                else:
+                    report_lines.append(f"- {name}: 数据获取失败")
+            except Exception:
+                report_lines.append(f"- {name}: 数据获取失败")
+                
         return "\n".join(report_lines) + "\n"
     except Exception as e:
         return f"⚠️ 盘面数据抓取异常: {str(e)}\n"
@@ -122,12 +132,9 @@ def strategy_filter(stock_code):
         today = df.iloc[-1]
         yesterday = df.iloc[-2]
         
-        # === 新增：K线形态安全因子 ===
-        # 1. 拒绝跳空低开 (防重大利空)
+        # === K线形态安全因子 ===
         if today['开盘'] < yesterday['收盘'] * 0.985: return False 
-        # 2. 拒绝光头大长阴 (防坚决出货)
         if today['收盘'] < today['开盘'] * 0.97: return False
-        # 3. 拒绝长上影线 (防抛压极重)
         if today['收盘'] > today['开盘']:
             if (today['最高'] - today['收盘']) > (today['收盘'] - today['开盘']) * 1.5:
                 return False
@@ -135,7 +142,6 @@ def strategy_filter(stock_code):
         # === 原有基础逻辑 ===
         if not (today['MA20'] > today['MA60'] and today['MA20'] > yesterday['MA20']): return False
         if not (today['收盘'] > today['BBI'] and today['BBI'] > yesterday['BBI']): return False
-        # 严格缩量：当日成交量必须小于 5日均量 * 0.6
         if not (today['成交量'] < today['V_MA5'] * 0.6): return False
         if not (today['J'] < 20): return False
         if not (today['最低'] <= today['MA20'] * 1.015 and today['收盘'] > today['MA20']): return False
@@ -154,17 +160,15 @@ def get_quant_strategy_str():
         spot_df = spot_df[~spot_df['名称'].str.contains('ST')]
         spot_df = spot_df[~spot_df['代码'].str.startswith(('8', '4', '3', '68'))] 
         
-        # === 核心多因子预筛 ===
         spot_df = spot_df[
-            (spot_df['流通市值'] > 10000000000) &    # 百亿市值龙头
-            (spot_df['量比'] <= 0.8) &             # 盘口极度缩量
-            (spot_df['涨跌幅'] >= -4) &            # 拒绝暴跌
-            (spot_df['涨跌幅'] <= 2) &             # 拒绝追高
-            (spot_df['换手率'] >= 2.0) &            # 活跃度因子：过滤死水
-            (spot_df['60日涨跌幅'] >= 15.0)        # 动量因子：近期强势主线
+            (spot_df['流通市值'] > 10000000000) &    
+            (spot_df['量比'] <= 0.8) &             
+            (spot_df['涨跌幅'] >= -4) &            
+            (spot_df['涨跌幅'] <= 2) &             
+            (spot_df['换手率'] >= 2.0) &            
+            (spot_df['60日涨跌幅'] >= 15.0)        
         ]
         
-        # 按量比极度缩量排序，取最优质的前 400 只进入精准测算
         spot_df = spot_df.sort_values(by='量比', ascending=True)
         pool_df = spot_df.head(400).copy()
         
@@ -174,17 +178,31 @@ def get_quant_strategy_str():
     selected_stocks = []
     total_count = len(pool_df)
     
-    for idx, row in pool_df.iterrows():
+    # === 多线程提速核心架构 ===
+    counter = [0]  
+    lock = threading.Lock()  
+
+    def process_stock(row):
         code = row['代码']
         name = row['名称']
-        print(f"雷达深度测算中: [{idx + 1}/{total_count}] - {name} ({code}) ...", end="\r")
-        time.sleep(0.2)
         
-        if strategy_filter(code):
-            price = row['最新价']
-            pct = row['涨跌幅']
-            selected_stocks.append(f"- **{name}** ({code}) | 现价: `{price}` | 涨跌幅: {pct}%")
-                
+        is_match = strategy_filter(code)
+        
+        with lock:
+            counter[0] += 1
+            print(f"雷达多线程深度测算中: [{counter[0]}/{total_count}] - {name} ({code}) ...", end="\r")
+            
+            if is_match:
+                price = row['最新价']
+                pct = row['涨跌幅']
+                selected_stocks.append(f"- **{name}** ({code}) | 现价: `{price}` | 涨跌幅: {pct}%")
+        
+        time.sleep(0.1)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(process_stock, row) for _, row in pool_df.iterrows()]
+        concurrent.futures.wait(futures)
+        
     print("\n扫描完成！正在生成并推送报告...") 
     report_lines = ["**【🎯 量化选股信号 (多因子精锐版)】**\n"]
     if selected_stocks:
