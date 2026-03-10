@@ -1,28 +1,33 @@
-name: Daily Macro Radar
+name: 尾盘战法狙击 (14:40)
 
 on:
   schedule:
-    # 这里的 cron 使用 UTC 时间，0 0 * * * 代表 UTC 0点，即北京时间早上 8 点
-   - cron: '45 5 * * 1-5'
-  workflow_dispatch: # 这个指令允许你在网页上手动点击按钮触发运行，方便测试
+    # 每天 UTC 时间 06:10 (对应北京时间 14:10) 触发排队，周一至周五
+    - cron: '10 6 * * 1-5'
+  workflow_dispatch: 
 
 jobs:
-  run-radar:
+  run-strategy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: 检出代码
+      uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
+    - name: 设置 Python 3.10 环境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+    - name: 设置北京时区
+      run: |
+        sudo timedatectl set-timezone Asia/Shanghai
+        date
 
-      - name: Run macro radar
-        run: |
-          python macro.py
+    - name: 安装依赖
+      run: |
+        python -m pip install --upgrade pip
+        pip install akshare pandas requests
+
+    - name: 执行尾盘脚本
+      # 这里已严格更正为 macro.py
+      run: python macro.py
