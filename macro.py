@@ -2,15 +2,18 @@ import akshare as ak
 import pandas as pd
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # ================= 配置区 =================
 PUSHPLUS_TOKEN = "0388622be9f34acdbaaafa2126e80fa2"
+# 定义全局北京时区
+BJ_TZ = timezone(timedelta(hours=8))
 # ==========================================
 
 def get_market_data_and_filter():
     """拉取全市场数据并进行双层梯队筛选"""
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 开始拉取 A 股实时切片数据...")
+    now_str = datetime.now(BJ_TZ).strftime('%H:%M:%S')
+    print(f"[{now_str}] 开始拉取 A 股实时切片数据...")
     
     # 获取 A 股实时行情数据
     df_spot = ak.stock_zh_a_spot_em()
@@ -19,7 +22,8 @@ def get_market_data_and_filter():
     df_spot = df_spot[~df_spot['名称'].str.contains('ST')]
     df_spot = df_spot[~df_spot['代码'].str.startswith(('8', '688', '4'))]
     
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 基础过滤完成，开始划分战略梯队...")
+    now_str = datetime.now(BJ_TZ).strftime('%H:%M:%S')
+    print(f"[{now_str}] 基础过滤完成，开始划分战略梯队...")
 
     # 第一梯队：完全符合标准的买入目标（涨幅 3% - 5%，换手率 >= 5%）
     strict_targets = df_spot[
@@ -29,7 +33,6 @@ def get_market_data_and_filter():
     ].copy()
     
     # 第二梯队：高优先备选队列（涨幅 1.5% - 5%，换手率 >= 4%）
-    # 必须剔除掉已经进入第一梯队的股票
     near_miss_targets = df_spot[
         (df_spot['涨跌幅'] >= 1.5) & 
         (df_spot['涨跌幅'] <= 5.0) & 
@@ -42,9 +45,8 @@ def get_market_data_and_filter():
 def push_results(strict_df, near_miss_df):
     """将两层梯队的数据格式化为美观的 HTML 并推送至微信"""
     url = "http://www.pushplus.plus/send"
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(BJ_TZ).strftime("%Y-%m-%d")
     
-    # 基础 CSS 样式定义（针对微信移动端优化）
     html_content = f"""
     <html>
     <head>
@@ -68,12 +70,11 @@ def push_results(strict_df, near_miss_df):
         <div class="title">🎯 尾盘战法 14:40 狙击指令</div>
     """
 
-    # --- 构建第一梯队：完全达标的核心目标 ---
+    # 构建第一梯队
     html_content += '<div class="section-title title-strict">🔥 核心狙击目标 (完全达标)</div>'
     if strict_df.empty:
         html_content += '<p style="text-align: center; color: #888; font-size: 14px;">当前无完全符合严格标准的标的。</p>'
     else:
-        # 按换手率降序排序，选出最具活力的前10只标的
         strict_df = strict_df.sort_values(by='换手率', ascending=False).head(10)
         html_content += '<table><tr><th>代码</th><th>名称</th><th>涨幅</th><th>换手率</th></tr>'
         for _, row in strict_df.iterrows():
@@ -87,12 +88,11 @@ def push_results(strict_df, near_miss_df):
             """
         html_content += '</table>'
 
-    # --- 构建第二梯队：高优先备选队列 ---
+    # 构建第二梯队
     html_content += '<div class="section-title title-near">⚡ 高优先备选队列 (蓄势待发)</div>'
     if near_miss_df.empty:
         html_content += '<p style="text-align: center; color: #888; font-size: 14px;">当前无接近达标的备选标的。</p>'
     else:
-        # 备选队列也按换手率排序，提取前 8 名避免信息过载
         near_miss_df = near_miss_df.sort_values(by='换手率', ascending=False).head(8)
         html_content += '<table><tr><th>代码</th><th>名称</th><th>涨幅</th><th>换手率</th></tr>'
         for _, row in near_miss_df.iterrows():
@@ -106,7 +106,6 @@ def push_results(strict_df, near_miss_df):
             """
         html_content += '</table>'
 
-    # --- 风险提示模块 ---
     html_content += """
         <div class="tips">
             <b>纪律执行提示：</b><br>
@@ -119,7 +118,6 @@ def push_results(strict_df, near_miss_df):
     </html>
     """
 
-    # 组装 API 请求负载
     payload = {
         "token": PUSHPLUS_TOKEN,
         "title": f"尾盘战法决策 - {date_str} 14:40",
@@ -127,31 +125,31 @@ def push_results(strict_df, near_miss_df):
         "template": "html"
     }
     
-    # 发送推送
     try:
         response = requests.post(url, json=payload, timeout=10)
+        now_str = datetime.now(BJ_TZ).strftime('%H:%M:%S')
         if response.status_code == 200:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 尾盘策略排版推送成功！请查收微信。")
+            print(f"[{now_str}] 尾盘策略排版推送成功！请查收微信。")
         else:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] 推送失败，PushPlus 状态码: {response.status_code}")
+            print(f"[{now_str}] 推送失败，PushPlus 状态码: {response.status_code}")
     except Exception as e:
         print(f"推送过程发生异常: {e}")
 
 def main():
-    # 核心：精确计算需要休眠的时间，直到北京时间 14:40:02 避开网络延迟
-    now = datetime.now()
+    # 强行在代码层面锁定北京时间 (UTC+8)
+    now = datetime.now(BJ_TZ)
+    
+    # 设置目标时间 14:40:02
     target_time = now.replace(hour=14, minute=40, second=2, microsecond=0)
     
     wait_seconds = (target_time - now).total_seconds()
     
     if wait_seconds > 0:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 脚本已在 GitHub 云端启动，进入静默休眠...")
-        print(f"等待 14:40:02 唤醒狙击 (还需等待 {int(wait_seconds)} 秒)")
+        print(f"[{now.strftime('%H:%M:%S')}] 脚本已启动，静默休眠等待 14:40:02 唤醒... (需等待 {int(wait_seconds)} 秒)")
         time.sleep(wait_seconds)
     else:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 当前时间已过 14:40，立即执行数据拉取！")
+        print(f"[{now.strftime('%H:%M:%S')}] 当前已过 14:40，立即执行数据拉取！")
         
-    # 时间到达，唤醒执行
     strict_targets, near_miss_targets = get_market_data_and_filter()
     push_results(strict_targets, near_miss_targets)
 
