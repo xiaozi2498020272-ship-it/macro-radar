@@ -11,24 +11,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4  # 升级到 v4
 
-    - name: 设置 Python 3.10 环境
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
+      - name: Set up Python
+        uses: actions/setup-python@v5  # 升级到 v5
+        with:
+          python-version: '3.10'
 
-    - name: 设置北京时区 (解决时差问题)
-      run: |
-        sudo timedatectl set-timezone Asia/Shanghai
-        date
+      - name: 设置北京时区
+        run: |
+          sudo timedatectl set-timezone Asia/Shanghai
+          date
 
-    - name: 安装量化依赖库
-      run: |
-        python -m pip install --upgrade pip
-        pip install akshare pandas requests
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install akshare pandas requests
 
-    - name: 执行擒龙 Python 脚本
-      # 注意这里改成了你上传的文件名
-      run: python qinlong.py
+      - name: 执行擒龙 Python 脚本
+        # 注意这里改成了你上传的文件名
+        run: python qinlong.py
